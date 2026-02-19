@@ -18,6 +18,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late Timer _timer;
   late Future<PackageInfo> _packageInfo;
+  Size? _lastScreenSize;
 
   @override
   void initState() {
@@ -54,6 +55,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.detached) {
       final provider = context.read<StopwatchProvider>();
       provider.shutdownOverlay();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final size = MediaQuery.of(context).size;
+    if (_lastScreenSize != size) {
+      _lastScreenSize = size;
+      context.read<StopwatchProvider>().setOverlayScreenSize(size);
     }
   }
 

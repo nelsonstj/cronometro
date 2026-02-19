@@ -32,16 +32,19 @@ class _SettingsPanelState extends State<SettingsPanel> {
     _ColorOption('Verde', Color(0xD92E7D32)),
     _ColorOption('Vermelho', Color(0xD9C62828)),
     _ColorOption('Amarelo', Color(0xD9F9A825)),
+    _ColorOption('Roxo', Color(0xD95b3c88)),
     _ColorOption('Branco', Color(0xD9FFFFFF)),
   ];
 
   static const List<_ColorOption> _overlayTextColors = [
-    _ColorOption('Branco', Color(0xFFFFFFFF)),
     _ColorOption('Preto', Color(0xFF000000)),
     _ColorOption('Cinza', Color(0xFFBDBDBD)),
     _ColorOption('Azul', Color(0xFF90CAF9)),
     _ColorOption('Verde', Color(0xFFA5D6A7)),
+    _ColorOption('Vermelho', Color(0xFFEF9A9A)),
     _ColorOption('Amarelo', Color(0xFFFFF59D)),
+    _ColorOption('Roxo', Color(0xFFD9C1FF)),
+    _ColorOption('Branco', Color(0xFFFFFFFF)),
   ];
 
   @override
@@ -354,7 +357,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       _buildColorChips(
                         options: _overlayBgColors,
                         selected: provider.overlayStoppedBgColor,
-                        onSelected: (color) => provider.setOverlayStoppedBgColor(color),
+                        onSelected: (color) async => await provider.setOverlayStoppedBgColor(color),
                       ),
                       const SizedBox(height: 12),
                       const Text('Cor de fundo (em execução)'),
@@ -362,7 +365,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       _buildColorChips(
                         options: _overlayBgColors,
                         selected: provider.overlayRunningBgColor,
-                        onSelected: (color) => provider.setOverlayRunningBgColor(color),
+                        onSelected: (color) async => await provider.setOverlayRunningBgColor(color),
                       ),
                       const SizedBox(height: 12),
                       const Text('Cor do texto da janela flutuante'),
@@ -370,7 +373,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       _buildColorChips(
                         options: _overlayTextColors,
                         selected: provider.overlayTextColor,
-                        onSelected: (color) => provider.setOverlayTextColor(color),
+                        onSelected: (color) async => await provider.setOverlayTextColor(color),
                       ),
                       const SizedBox(height: 12),
                       Row(
@@ -392,6 +395,24 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       ),
                       const SizedBox(height: 8),
                     ],
+                  ),
+                  ListTile(
+                    title: const Text('Resetar posicao da janela flutuante'),
+                    subtitle: Text(
+                      provider.showOverlay
+                          ? 'Volta a posicao padrao do overlay'
+                          : 'Ative o modo flutuante para usar esta opcao',
+                    ),
+                    trailing: const Icon(Icons.refresh),
+                    onTap: provider.showOverlay
+                        ? () async {
+                            await AndroidOverlay.resetOverlayPosition();
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Posicao resetada.')),
+                            );
+                          }
+                        : null,
                   ),
                   if (isAndroid) ...[
                     const SizedBox(height: 8),

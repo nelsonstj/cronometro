@@ -15,6 +15,92 @@ class _LapListState extends State<LapList> {
   int _lastTotalLaps = 0;
   int _lastCurrentLaps = 0;
 
+  Future<void> _showLapLabelEditor(
+    BuildContext context,
+    StopwatchProvider provider,
+    Session session,
+    LapEntry lap,
+  ) async {
+    final controller = TextEditingController(text: lap.customLabel);
+    final labelHint = '${provider.lapLabel} ${lap.lapNumber}';
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Nome do intervalo'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: labelHint,
+            ),
+            textInputAction: TextInputAction.done,
+            onSubmitted: (value) {
+              Navigator.of(dialogContext).pop(value);
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Cancelar'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(controller.text);
+              },
+              child: const Text('Salvar'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+
+    if (result == null) return;
+    if (!context.mounted) return;
+    
+    // Dispara update no próximo frame para evitar rebuild enquanto widgets estão sendo descartados
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!context.mounted) return;
+      provider.updateLapLabel(session, lap.lapNumber, result);
+    });
+  }
+
+  Future<void> _showSessionActions(
+    BuildContext context,
+    StopwatchProvider provider,
+    Session session,
+  ) async {
+    final isCurrentRunning = provider.isRunning && provider.currentSession == session;
+    if (isCurrentRunning) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pausa o cronometro para excluir a serie.')),
+      );
+      return;
+    }
+
+    final shouldDelete = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: ListTile(
+            leading: const Icon(Icons.delete_outline),
+            title: const Text('Excluir serie'),
+            onTap: () {
+              Navigator.of(sheetContext).pop(true);
+            },
+          ),
+        );
+      },
+    );
+
+    if (shouldDelete == true && context.mounted) {
+      provider.deleteSession(session);
+    }
+  }
+
   void _scrollToTop() {
     if (_controller.hasClients) {
       _controller.jumpTo(0);
@@ -88,59 +174,66 @@ class _LapListState extends State<LapList> {
                             ? ValueKey('current-${session.sessionStart}-${session.laps.length}')
                             : ValueKey('session-${session.sessionStart}'),
                         initiallyExpanded: isCurrent && expandCurrentNow,
-                        title: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              _formatSessionRange(sessionStart, sessionEnd),
-                              style: TextStyle(
-                                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                fontSize: 14,
+                        title: InkWell(
+                          onLongPress: () => _showSessionActions(context, provider, session),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                _formatSessionRange(sessionStart, sessionEnd),
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  fontSize: 14,
+                                ),
                               ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.share, size: 18),
-                              tooltip: 'Compartilhar',
-                              onPressed: () async {
-                                await Share.share(exportText);
-                              },
-                            ),
-                            Text(
-                              _formatMilliseconds(sessionTotal),
-                              style: TextStyle(
-                                color: Theme.of(context).colorScheme.onSurface,
-                                fontSize: 14,
-                                fontFamily: 'Roboto Mono',
-                                fontWeight: FontWeight.w600,
+                              IconButton(
+                                icon: const Icon(Icons.share, size: 18),
+                                tooltip: 'Compartilhar',
+                                onPressed: () async {
+                                  await Share.share(exportText);
+                                },
                               ),
-                            ),
-                          ],
+                              Text(
+                                _formatSessionTotalWithHours(sessionTotal),
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.onSurface,
+                                  fontSize: 14,
+                                  fontFamily: 'Roboto Mono',
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                         children: [
                           const SizedBox(height: 4),
                           ...session.laps.reversed.map((lap) {
+                            final labelText = _lapDisplayLabel(provider, lap);
                             return Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    '${provider.lapLabel} ${lap.lapNumber}',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              child: InkWell(
+                                onLongPress: () => _showLapLabelEditor(context, provider, session, lap),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      labelText,
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                      ),
                                     ),
-                                  ),
-                                  Text(
-                                    _formatMilliseconds(lap.duration),
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
-                                      fontFamily: 'Roboto Mono',
-                                      color: Theme.of(context).colorScheme.onSurface,
+                                    Text(
+                                      _formatMilliseconds(lap.duration),
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w500,
+                                        fontFamily: 'Roboto Mono',
+                                        color: Theme.of(context).colorScheme.onSurface,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             );
                           }),
@@ -172,6 +265,14 @@ class _LapListState extends State<LapList> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}.${ms.toString().padLeft(2, '0')}';
   }
 
+  String _formatSessionTotalWithHours(int milliseconds) {
+    final totalSeconds = milliseconds ~/ 1000;
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final seconds = totalSeconds % 60;
+    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
   String _buildSessionExport({
     required StopwatchProvider provider,
     required Session session,
@@ -180,12 +281,12 @@ class _LapListState extends State<LapList> {
     required int sessionTotal,
   }) {
     final buffer = StringBuffer();
-    buffer.writeln('Sessao: ${_formatSessionRange(sessionStart, sessionEnd)}');
+    buffer.writeln('Sessão: ${_formatSessionRange(sessionStart, sessionEnd)}');
     if (session.isCountdown) {
       buffer.writeln('Modo: Contagem regressiva');
       buffer.writeln('Tempo inicial: ${_formatSeconds(session.countdownInitialMs)}');
     } else {
-      buffer.writeln('Modo: Cronometro');
+      buffer.writeln('Modo: Cronômetro');
       buffer.writeln('Total: ${_formatSeconds(sessionTotal)}');
     }
 
@@ -194,7 +295,8 @@ class _LapListState extends State<LapList> {
     } else {
       buffer.writeln('${provider.lapLabel}:');
       for (final lap in session.laps) {
-        buffer.writeln('${provider.lapLabel} ${lap.lapNumber}: ${_formatSeconds(lap.duration)}');
+        final labelText = _lapDisplayLabel(provider, lap);
+        buffer.writeln('$labelText: ${_formatSeconds(lap.duration)}');
       }
     }
 
@@ -210,6 +312,14 @@ class _LapListState extends State<LapList> {
       return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     }
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  String _lapDisplayLabel(StopwatchProvider provider, LapEntry lap) {
+    final custom = lap.customLabel.trim();
+    if (custom.isEmpty) {
+      return '${provider.lapLabel} ${lap.lapNumber}';
+    }
+    return custom;
   }
 
   @override

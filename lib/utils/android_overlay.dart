@@ -43,12 +43,13 @@ class AndroidOverlay {
   static Future<bool> showOverlay({bool minimizeApp = true}) async {
     if (!Platform.isAndroid) return false;
     try {
-      _log('[OVERLAY] Showing overlay...');
+        _log('[OVERLAY] Showing overlay...');
 
           final dpr = PlatformDispatcher.instance.views.isNotEmpty
             ? PlatformDispatcher.instance.views.first.devicePixelRatio
             : 1.0;
-          final prefs = await SharedPreferences.getInstance();
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.reload();
           final fontSize = prefs.getDouble('overlayFontSize') ?? 22.0;
           final showMilliseconds = prefs.getBool('showMilliseconds') ?? true;
           final showHours = prefs.getBool('showHours') ?? true;
@@ -65,8 +66,17 @@ class AndroidOverlay {
           final heightPx = (expandedHeight * dpr).round();
         final savedX = prefs.getDouble('overlay_pos_x');
         final savedY = prefs.getDouble('overlay_pos_y');
-        final startX = savedX ?? 0.0;
-        final startY = savedY ?? (60 * scale);
+        var startX = savedX ?? 0.0;
+        var startY = savedY ?? (60 * scale);
+        final screenW = prefs.getDouble('overlay_screen_w');
+        final screenH = prefs.getDouble('overlay_screen_h');
+        if (screenW != null && screenH != null) {
+          final overlayWidth = width < minWidth ? minWidth : width;
+          final maxX = screenW - overlayWidth;
+          final maxY = screenH - expandedHeight;
+          startX = startX.clamp(0.0, maxX < 0 ? 0.0 : maxX);
+          startY = startY.clamp(0.0, maxY < 0 ? 0.0 : maxY);
+        }
       
       await FlutterOverlayWindow.showOverlay(
         height: heightPx,
@@ -78,8 +88,8 @@ class AndroidOverlay {
         overlayTitle: '',
       );
       
-      _log('[OVERLAY] Overlay show request sent');
       await _waitForOverlayActive();
+      await FlutterOverlayWindow.moveOverlay(OverlayPosition(startX, startY));
       await Future.delayed(const Duration(milliseconds: 600));
       
       if (minimizeApp) {
@@ -128,6 +138,7 @@ class AndroidOverlay {
   static Future<bool> hideOverlay() async {
     if (!Platform.isAndroid) return false;
     try {
+      await _persistOverlayPosition();
       await FlutterOverlayWindow.closeOverlay();
       return true;
     } catch (e) {
@@ -145,6 +156,17 @@ class AndroidOverlay {
     }
   }
 
+  static Future<void> _persistOverlayPosition() async {
+    try {
+      final position = await FlutterOverlayWindow.getOverlayPosition();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('overlay_pos_x', position.x.toDouble());
+      await prefs.setDouble('overlay_pos_y', position.y.toDouble());
+    } catch (_) {
+      // Best effort - if position cannot be persisted, continue
+    }
+  }
+
   /// Opens the system battery optimization settings for the app.
   static Future<void> openBatteryOptimizationSettings() async {
     if (!Platform.isAndroid) return;
@@ -153,5 +175,24 @@ class AndroidOverlay {
     } catch (e) {
       // ignore - best effort
     }
+  }
+
+  static Future<void> resetOverlayPosition() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final fontSize = prefs.getDouble('overlayFontSize') ?? 22.0;
+      final scale = (fontSize / 22.0).clamp(0.7, 2.0);
+      final x = 0.0;
+      final y = 60 * scale;
+      await prefs.setDouble('overlay_pos_x', x);
+      await prefs.setDouble('overlay_pos_y', y);
+      try {
+        final isActive = await FlutterOverlayWindow.isActive();
+        if (isActive) {
+          await FlutterOverlayWindow.moveOverlay(OverlayPosition(x, y));
+        }
+      } catch (_) {}
+    } catch (_) {}
   }
 }

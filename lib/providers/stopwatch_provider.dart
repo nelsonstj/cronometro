@@ -10,14 +10,22 @@ class LapEntry {
   final int startTime; // epoch millis
   final int endTime; // epoch millis
   final int duration; // millis
+  final String customLabel;
 
-  LapEntry({required this.lapNumber, required this.startTime, required this.endTime, required this.duration});
+  LapEntry({
+    required this.lapNumber,
+    required this.startTime,
+    required this.endTime,
+    required this.duration,
+    this.customLabel = '',
+  });
 
   Map<String, dynamic> toJson() => {
         'lapNumber': lapNumber,
         'startTime': startTime,
         'endTime': endTime,
         'duration': duration,
+        'customLabel': customLabel,
       };
 
   factory LapEntry.fromJson(Map<String, dynamic> json) => LapEntry(
@@ -25,7 +33,18 @@ class LapEntry {
         startTime: json['startTime'],
         endTime: json['endTime'],
         duration: json['duration'],
+        customLabel: json['customLabel']?.toString() ?? '',
       );
+
+  LapEntry copyWith({String? customLabel}) {
+    return LapEntry(
+      lapNumber: lapNumber,
+      startTime: startTime,
+      endTime: endTime,
+      duration: duration,
+      customLabel: customLabel ?? this.customLabel,
+    );
+  }
 }
 
 class Session {
@@ -88,6 +107,7 @@ class StopwatchProvider extends ChangeNotifier {
   bool _vibrateOnCountdownFinish = true;
   bool _countdownFinishedNotified = false;
   String _lapLabel = 'Volta';
+  Size? _overlayScreenSize;
 
   // Overlay event polling
   final Set<String> _processedOverlayIds = {};
@@ -247,27 +267,34 @@ class StopwatchProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setOverlayStoppedBgColor(Color color) {
+  void setOverlayScreenSize(Size size) {
+    if (_overlayScreenSize == size) return;
+    _overlayScreenSize = size;
+    _prefs.setDouble('overlay_screen_w', size.width);
+    _prefs.setDouble('overlay_screen_h', size.height);
+  }
+
+  Future<void> setOverlayStoppedBgColor(Color color) async {
     if (_overlayStoppedBgColor.toARGB32() == color.toARGB32()) return;
     _overlayStoppedBgColor = color;
-    _prefs.setInt('overlayStoppedBgColor', color.toARGB32());
-    _persistOverlayState(source: 'main');
+    await _prefs.setInt('overlayStoppedBgColor', color.toARGB32());
+    await _persistOverlayState(source: 'main');
     notifyListeners();
   }
 
-  void setOverlayRunningBgColor(Color color) {
+  Future<void> setOverlayRunningBgColor(Color color) async {
     if (_overlayRunningBgColor.toARGB32() == color.toARGB32()) return;
     _overlayRunningBgColor = color;
-    _prefs.setInt('overlayRunningBgColor', color.toARGB32());
-    _persistOverlayState(source: 'main');
+    await _prefs.setInt('overlayRunningBgColor', color.toARGB32());
+    await _persistOverlayState(source: 'main');
     notifyListeners();
   }
 
-  void setOverlayTextColor(Color color) {
+  Future<void> setOverlayTextColor(Color color) async {
     if (_overlayTextColor.toARGB32() == color.toARGB32()) return;
     _overlayTextColor = color;
-    _prefs.setInt('overlayTextColor', color.toARGB32());
-    _persistOverlayState(source: 'main');
+    await _prefs.setInt('overlayTextColor', color.toARGB32());
+    await _persistOverlayState(source: 'main');
     notifyListeners();
   }
 
@@ -394,8 +421,12 @@ class StopwatchProvider extends ChangeNotifier {
       if (type == 'start') {
         startStopwatch();
       } else if (type == 'lap') {
+        final elapsedMs = e['elapsedMs'];
         if (!_isRunning) {
           startStopwatch();
+        }
+        if (elapsedMs is int) {
+          addLapWithElapsed(elapsedMs);
         } else {
           addLap();
         }
@@ -592,6 +623,56 @@ class StopwatchProvider extends ChangeNotifier {
     }
   }
 
+  void addLapWithElapsed(int elapsedMs) {
+    if (_isCountdownMode) return;
+    final session = _currentSession;
+    if (session == null) return;
+    final sessionStart = session.sessionStart;
+    final previousElapsed = session.laps.isNotEmpty ? session.laps.last.endTime - sessionStart : 0;
+    final safeElapsed = elapsedMs < previousElapsed ? previousElapsed : elapsedMs;
+    final lapStartTime = sessionStart + previousElapsed;
+    final lapEndTime = sessionStart + safeElapsed;
+    final duration = lapEndTime - lapStartTime;
+    final lapNumber = session.laps.length + 1;
+    final entry = LapEntry(lapNumber: lapNumber, startTime: lapStartTime, endTime: lapEndTime, duration: duration);
+    session.laps.add(entry);
+    _laps.add(safeElapsed);
+    notifyListeners();
+    _saveSessions();
+    _saveCurrentSession();
+  }
+
+  void updateLapLabel(Session session, int lapNumber, String label) {
+    final normalized = label.trim();
+    final sessionStart = session.sessionStart;
+    var updated = false;
+
+    if (_currentSession != null && _currentSession!.sessionStart == sessionStart) {
+      updated = _setLapLabel(_currentSession!, lapNumber, normalized) || updated;
+    }
+
+    for (final stored in _sessions) {
+      if (stored.sessionStart != sessionStart) continue;
+      updated = _setLapLabel(stored, lapNumber, normalized) || updated;
+      break;
+    }
+
+    if (updated) {
+      _saveSessions();
+      _saveCurrentSession();
+      notifyListeners();
+    }
+  }
+
+  bool _setLapLabel(Session session, int lapNumber, String label) {
+    final index = session.laps.indexWhere((lap) => lap.lapNumber == lapNumber);
+    if (index == -1) return false;
+    final current = session.laps[index];
+    if (current.customLabel == label) return false;
+    session.laps[index] = current.copyWith(customLabel: label);
+    return true;
+  }
+
   void resetStopwatch() {
     // finalize current session
     if (_currentSession != null) {
@@ -608,6 +689,26 @@ class StopwatchProvider extends ChangeNotifier {
     _isRunning = false;
     _countdownFinishedNotified = false;
     _laps.clear();
+    notifyListeners();
+    _persistOverlayState();
+  }
+
+  void deleteSession(Session session) {
+    final sessionStart = session.sessionStart;
+    if (_isRunning && _currentSession != null && _currentSession!.sessionStart == sessionStart) {
+      return;
+    }
+    _sessions.removeWhere((s) => s.sessionStart == sessionStart);
+    if (_currentSession != null && _currentSession!.sessionStart == sessionStart) {
+      _currentSession = null;
+      _accumulatedMilliseconds = 0;
+      _lastStartTimestamp = null;
+      _isRunning = false;
+      _countdownFinishedNotified = false;
+      _laps.clear();
+    }
+    _saveSessions();
+    _saveCurrentSession();
     notifyListeners();
     _persistOverlayState();
   }

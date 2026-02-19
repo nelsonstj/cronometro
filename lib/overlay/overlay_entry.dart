@@ -16,6 +16,7 @@ class _OverlayAppState extends State<OverlayApp> {
   Timer? _refreshTimer;
   Timer? _actionsTimer;
   Timer? _positionTimer;
+  bool _isResizing = false;  // Evita múltiplos resizes simultâneos
   Duration _elapsed = Duration.zero;
   int _accumulatedMs = 0;
   int _runningSinceMs = -1;
@@ -38,6 +39,8 @@ class _OverlayAppState extends State<OverlayApp> {
   @override
   void initState() {
     super.initState();
+    _actionsTimer?.cancel();  // Cancela timer pendente de long press anterior
+    _showActions = false;     // Reset imediato - evita mostrar opções ao reabrir
     _initFromPrefs();
   }
 
@@ -65,6 +68,8 @@ class _OverlayAppState extends State<OverlayApp> {
   Future<void> _initFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
+    final savedPosX = prefs.getDouble('overlay_pos_x');
+    final savedPosY = prefs.getDouble('overlay_pos_y');
     final elapsedMs = prefs.getInt('overlay_elapsed_ms') ?? 0;
     final accumulatedMs = prefs.getInt('overlay_accumulated_ms') ?? elapsedMs;
     final runningSince = prefs.getInt('overlay_running_since_ms') ?? -1;
@@ -79,8 +84,6 @@ class _OverlayAppState extends State<OverlayApp> {
     final fontSize = prefs.getDouble('overlayFontSize') ?? 22.0;
     final isCountdown = prefs.getBool('overlay_is_countdown') ?? false;
     final countdownTotal = prefs.getInt('overlay_countdown_total_ms') ?? 0;
-    final savedPosX = prefs.getDouble('overlay_pos_x');
-    final savedPosY = prefs.getDouble('overlay_pos_y');
 
     if (!mounted) return;
 
@@ -110,9 +113,7 @@ class _OverlayAppState extends State<OverlayApp> {
       _countdownTotalMs = countdownTotal;
       _lastSavedPosX = savedPosX;
       _lastSavedPosY = savedPosY;
-      if (isRunning) {
-        _showActions = false;
-      }
+      _showActions = false;
     });
 
     _refreshTimer?.cancel();
@@ -121,14 +122,16 @@ class _OverlayAppState extends State<OverlayApp> {
       _recomputeElapsed();
     });
 
-    _startPositionPoller();
     await _resizeOverlayWindow();
+    await Future.delayed(const Duration(milliseconds: 200));
+    await _restoreLastPosition(savedPosX, savedPosY);
+    _startPositionPoller();
 
   }
 
   void _startPositionPoller() {
     _positionTimer?.cancel();
-    _positionTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+    _positionTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
       _saveOverlayPosition();
     });
   }
@@ -136,16 +139,60 @@ class _OverlayAppState extends State<OverlayApp> {
   Future<void> _saveOverlayPosition() async {
     try {
       final position = await FlutterOverlayWindow.getOverlayPosition();
-      if (position is! OverlayPosition) return;
-      final x = position.x.toDouble();
-      final y = position.y.toDouble();
-      if (_lastSavedPosX == x && _lastSavedPosY == y) return;
+      var x = position.x.toDouble();
+      var y = position.y.toDouble();
+      
+      // Protege contra salvar (0,0) quando overlay foi destruído
+      if (x == 0.0 && y == 0.0 && (_lastSavedPosX != 0.0 || _lastSavedPosY != 0.0)) {
+        return;
+      }
+      
+      if (_lastSavedPosX == x && _lastSavedPosY == y) {
+        return;
+      }
       final prefs = await SharedPreferences.getInstance();
+      final screenW = prefs.getDouble('overlay_screen_w');
+      final screenH = prefs.getDouble('overlay_screen_h');
+      if (screenW != null && screenH != null) {
+        final maxX = screenW - _overlayWidth();
+        final maxY = screenH - _overlayExpandedHeight();
+        final clampedX = x.clamp(0.0, maxX < 0 ? 0.0 : maxX);
+        final clampedY = y.clamp(0.0, maxY < 0 ? 0.0 : maxY);
+        if (clampedX != x || clampedY != y) {
+          await FlutterOverlayWindow.moveOverlay(OverlayPosition(clampedX, clampedY));
+          x = clampedX;
+          y = clampedY;
+        }
+      }
       await prefs.setDouble('overlay_pos_x', x);
       await prefs.setDouble('overlay_pos_y', y);
       _lastSavedPosX = x;
       _lastSavedPosY = y;
-    } catch (_) {}
+    } catch (_) {
+      // Best effort - if position cannot be saved, continue
+    }
+  }
+
+  Future<void> _restoreLastPosition(double? savedX, double? savedY) async {
+    if (savedX == null || savedY == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final screenW = prefs.getDouble('overlay_screen_w');
+      final screenH = prefs.getDouble('overlay_screen_h');
+      var x = savedX;
+      var y = savedY;
+      if (screenW != null && screenH != null) {
+        final maxX = screenW - _overlayWidth();
+        final maxY = screenH - _overlayExpandedHeight();
+        if (maxX >= 0) x = x.clamp(0.0, maxX);
+        if (maxY >= 0) y = y.clamp(0.0, maxY);
+      }
+      await FlutterOverlayWindow.moveOverlay(OverlayPosition(x, y));
+      _lastSavedPosX = x;
+      _lastSavedPosY = y;
+    } catch (_) {
+      // Best effort - if restore fails, overlay will use last known position
+    }
   }
 
   Future<void> _pullFromPrefs() async {
@@ -168,14 +215,20 @@ class _OverlayAppState extends State<OverlayApp> {
     final countdownTotal = prefs.getInt('overlay_countdown_total_ms') ?? 0;
     if (elapsedMs == null || isRunning == null) return;
 
-    final settingsChanged = showMilliseconds != _showMilliseconds ||
+    // Mudanças que afetam TAMANHO requerem resize
+    final sizeSettingsChanged = showMilliseconds != _showMilliseconds ||
         showHours != _showHours ||
-        stoppedBgColor.toARGB32() != _overlayStoppedBgColor.toARGB32() ||
+        fontSize != _overlayFontSize;
+    
+    // Mudanças de COR não afetam tamanho, apenas visual
+    final colorSettingsChanged = stoppedBgColor.toARGB32() != _overlayStoppedBgColor.toARGB32() ||
         runningBgColor.toARGB32() != _overlayRunningBgColor.toARGB32() ||
-      textColor.toARGB32() != _overlayTextColor.toARGB32() ||
-      fontSize != _overlayFontSize ||
-      isCountdown != _isCountdownMode ||
-      countdownTotal != _countdownTotalMs;
+        textColor.toARGB32() != _overlayTextColor.toARGB32();
+    
+    final countdownSettingsChanged = isCountdown != _isCountdownMode ||
+        countdownTotal != _countdownTotalMs;
+
+    final settingsChanged = sizeSettingsChanged || colorSettingsChanged || countdownSettingsChanged;
 
     if (source != 'main') {
       if (settingsChanged) {
@@ -189,7 +242,10 @@ class _OverlayAppState extends State<OverlayApp> {
           _isCountdownMode = isCountdown;
           _countdownTotalMs = countdownTotal;
         });
-        await _resizeOverlayWindow();
+        // Só faz resize se mudanças afetam TAMANHO
+        if (sizeSettingsChanged) {
+          await _resizeOverlayWindow();
+        }
       }
       return;
     }
@@ -232,11 +288,8 @@ class _OverlayAppState extends State<OverlayApp> {
       _overlayFontSize = fontSize;
       _isCountdownMode = isCountdown;
       _countdownTotalMs = countdownTotal;
-      if (isRunning) {
-        _showActions = false;
-      }
     });
-    if (settingsChanged) {
+    if (sizeSettingsChanged) {
       await _resizeOverlayWindow();
     }
   }
@@ -291,6 +344,7 @@ class _OverlayAppState extends State<OverlayApp> {
   }
 
   Future<void> _onSingleTap() async {
+    _actionsTimer?.cancel();  // Cancela timer de ações ao tocar
     if (!_isRunning) {
       setState(() {
         _isRunning = true;
@@ -327,7 +381,6 @@ class _OverlayAppState extends State<OverlayApp> {
         _isRunning = false;
         _accumulatedMs = _elapsed.inMilliseconds;
         _runningSinceMs = -1;
-        _showActions = false;
       });
     }
     await _persistOverlayState();
@@ -360,6 +413,8 @@ class _OverlayAppState extends State<OverlayApp> {
 
   Future<void> _closeFromOverlay() async {
     try {
+      _actionsTimer?.cancel();    // Cancela qualquer timer de ações pendente
+      _showActions = false;       // Reseta o estado das opções
       await _saveOverlayPosition();
       await _pushEvent({
         'type': 'close',
@@ -428,14 +483,27 @@ class _OverlayAppState extends State<OverlayApp> {
   }
 
   Future<void> _resizeOverlayWindow() async {
+    if (_isResizing) return; // Evita múltiplos resizes simultâneos
+    _isResizing = true;
     try {
+      // Preserva a posição atual antes do resize
+      final currentPosition = await FlutterOverlayWindow.getOverlayPosition();
+      
       final dpr = PlatformDispatcher.instance.views.isNotEmpty
           ? PlatformDispatcher.instance.views.first.devicePixelRatio
           : 1.0;
       final widthPx = (_overlayWidth() * dpr).round();
       final heightPx = (_overlayExpandedHeight() * dpr).round();
       await FlutterOverlayWindow.resizeOverlay(widthPx, heightPx, true);
-    } catch (_) {}
+      
+      // Restaura a posição após o resize
+      await Future.delayed(const Duration(milliseconds: 150));
+      await FlutterOverlayWindow.moveOverlay(currentPosition);
+    } catch (_) {
+      // Best effort - se resize falhar, continua
+    } finally {
+      _isResizing = false;
+    }
   }
 
   @override
@@ -450,18 +518,16 @@ class _OverlayAppState extends State<OverlayApp> {
               behavior: HitTestBehavior.opaque,
               onTap: _onSingleTap,
               onDoubleTap: _onDoubleTap,
-                onLongPress: () {
-                  if (!_isRunning) {
-                    if (_showActions) {
-                      setState(() {
-                        _showActions = false;
-                      });
-                      _actionsTimer?.cancel();
-                    } else {
-                      _showActionsTemporarily();
-                    }
-                  }
-                },
+              onLongPress: () {
+                if (_showActions) {
+                  setState(() {
+                    _showActions = false;
+                  });
+                  _actionsTimer?.cancel();
+                } else {
+                  _showActionsTemporarily();
+                }
+              },
               child: Container(
                 width: _overlayWidth(),
                   height: _showActions ? _overlayExpandedHeight() : _overlayBaseHeight(),
