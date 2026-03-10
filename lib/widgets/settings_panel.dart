@@ -200,6 +200,16 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       },
                     ),
                   ),
+                  ListTile(
+                    title: const Text('Quebrar minutos por hora'),
+                    subtitle: const Text('Ao atingir 60 min, exibir como 1:00:00 em vez de 60:00'),
+                    trailing: Switch(
+                      value: provider.breakMinutesByHour,
+                      onChanged: (value) {
+                        provider.setBreakMinutesByHour(value);
+                      },
+                    ),
+                  ),
                   const SizedBox(height: 16),
                   const Divider(),
                   const SizedBox(height: 16),
@@ -342,6 +352,19 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       },
                     ),
                   ),
+                  if (provider.showOverlay)
+                    ListTile(
+                      title: const Text('Mostrar na Tela de Bloqueio'),
+                      subtitle: const Text(
+                        'Exibir cronômetro na tela de bloqueio',
+                      ),
+                      trailing: Switch(
+                        value: provider.showOnLockScreen,
+                        onChanged: (value) {
+                          provider.setShowOnLockScreen(value);
+                        },
+                      ),
+                    ),
                   ExpansionTile(
                     title: const Text(
                       'Aparência da janela flutuante',

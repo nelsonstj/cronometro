@@ -26,36 +26,43 @@ class _LapListState extends State<LapList> {
     final result = await showDialog<String>(
       context: context,
       builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Nome do intervalo'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: InputDecoration(
-              hintText: labelHint,
-            ),
-            textInputAction: TextInputAction.done,
-            onSubmitted: (value) {
-              Navigator.of(dialogContext).pop(value);
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-              },
-              child: const Text('Cancelar'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop(controller.text);
-              },
-              child: const Text('Salvar'),
-            ),
-          ],
+        return StatefulBuilder(
+          builder: (stateContext, setState) {
+            return AlertDialog(
+              title: const Text('Nome do intervalo'),
+              content: TextField(
+                controller: controller,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: labelHint,
+                ),
+                textInputAction: TextInputAction.done,
+                onSubmitted: (value) {
+                  Navigator.of(dialogContext).pop(value);
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(dialogContext).pop();
+                  },
+                  child: const Text('Cancelar'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(dialogContext).pop(controller.text);
+                  },
+                  child: const Text('Salvar'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
+    
+    // Aguarda um frame antes de descartar o controller
+    await Future.delayed(const Duration(milliseconds: 100));
     controller.dispose();
 
     if (result == null) return;
@@ -259,10 +266,11 @@ class _LapListState extends State<LapList> {
 
   String _formatMilliseconds(int milliseconds) {
     int totalSeconds = milliseconds ~/ 1000;
-    int minutes = totalSeconds ~/ 60;
+    int hours = totalSeconds ~/ 3600;
+    int minutes = (totalSeconds % 3600) ~/ 60;
     int seconds = totalSeconds % 60;
     int ms = (milliseconds % 1000) ~/ 10;
-    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}.${ms.toString().padLeft(2, '0')}';
+    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}.${ms.toString().padLeft(2, '0')}';
   }
 
   String _formatSessionTotalWithHours(int milliseconds) {
@@ -308,10 +316,7 @@ class _LapListState extends State<LapList> {
     int hours = totalSeconds ~/ 3600;
     int minutes = (totalSeconds % 3600) ~/ 60;
     int seconds = totalSeconds % 60;
-    if (hours > 0) {
-      return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-    }
-    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
   String _lapDisplayLabel(StopwatchProvider provider, LapEntry lap) {

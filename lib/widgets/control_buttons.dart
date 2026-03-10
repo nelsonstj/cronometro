@@ -24,7 +24,7 @@ class ControlButtons extends StatelessWidget {
         final buttons = <Widget>[];
 
         // Botao Reset
-        if (!provider.isRunning && provider.elapsedMilliseconds > 0)
+        if (!provider.isRunning && provider.elapsedMilliseconds > 0) {
           buttons.add(
             FloatingActionButton(
               onPressed: () {
@@ -37,6 +37,7 @@ class ControlButtons extends StatelessWidget {
               ),
             ),
           );
+        }
 
         // Botao Play/Pause
         buttons.add(
@@ -57,7 +58,7 @@ class ControlButtons extends StatelessWidget {
         );
 
         // Botao Volta
-        if (provider.isRunning && !provider.isCountdownMode)
+        if (provider.isRunning && !provider.isCountdownMode) {
           buttons.add(
             FloatingActionButton(
               onPressed: () {
@@ -70,6 +71,7 @@ class ControlButtons extends StatelessWidget {
               ),
             ),
           );
+        }
 
         return Row(
           mainAxisAlignment: MainAxisAlignment.center,

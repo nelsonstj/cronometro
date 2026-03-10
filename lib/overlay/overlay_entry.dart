@@ -26,6 +26,7 @@ class _OverlayAppState extends State<OverlayApp> {
   bool _showActions = false;
   bool _showMilliseconds = true;
   bool _showHours = true;
+  bool _breakMinutesByHour = true;
   Color _overlayStoppedBgColor = const Color(0xD9000000);
   Color _overlayRunningBgColor = const Color(0xD9000000);
   Color _overlayTextColor = const Color(0xFFFFFFFF);
@@ -78,6 +79,7 @@ class _OverlayAppState extends State<OverlayApp> {
     final lastTs = prefs.getInt('overlay_state_ts') ?? 0;
     final showMilliseconds = prefs.getBool('showMilliseconds') ?? true;
     final showHours = prefs.getBool('showHours') ?? true;
+    final breakMinutesByHour = prefs.getBool('breakMinutesByHour') ?? true;
     final stoppedBgColor = Color(prefs.getInt('overlayStoppedBgColor') ?? 0xD9000000);
     final runningBgColor = Color(prefs.getInt('overlayRunningBgColor') ?? 0xD9000000);
     final textColor = Color(prefs.getInt('overlayTextColor') ?? 0xFFFFFFFF);
@@ -105,6 +107,7 @@ class _OverlayAppState extends State<OverlayApp> {
       _lastStateTs = lastTs;
       _showMilliseconds = showMilliseconds;
       _showHours = showHours;
+      _breakMinutesByHour = breakMinutesByHour;
       _overlayStoppedBgColor = stoppedBgColor;
       _overlayRunningBgColor = runningBgColor;
       _overlayTextColor = textColor;
@@ -117,13 +120,28 @@ class _OverlayAppState extends State<OverlayApp> {
     });
 
     _refreshTimer?.cancel();
-    _refreshTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      _pullFromPrefs();
-      _recomputeElapsed();
+    // Novo comportamento: sempre verifica estado de mudanças
+    // Quando rodando: atualiza a cada 200ms
+    // Quando parado: reduz para 500ms para poupar bateria mas mantém responsividade
+    _refreshTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      // Sempre recomputa elapsed se está rodando
+      if (_isRunning) {
+        _recomputeElapsed();
+        // Também tira um pull frequente para sincronizar
+        _pullFromPrefs();
+      } else {
+        // Quando parado, pull menos frequente mas ainda verifica mudanças
+        // isso garante que se o usuário ativar do app, vê logo
+        _pullFromPrefs();
+      }
     });
 
     await _resizeOverlayWindow();
-    await Future.delayed(const Duration(milliseconds: 200));
+    await Future.delayed(const Duration(milliseconds: 100));
+    
+    // Sincronização imediata ao abrir o overlay
+    await _pullFromPrefs();
+    
     await _restoreLastPosition(savedPosX, savedPosY);
     _startPositionPoller();
 
@@ -131,7 +149,8 @@ class _OverlayAppState extends State<OverlayApp> {
 
   void _startPositionPoller() {
     _positionTimer?.cancel();
-    _positionTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
+    // Reduzido de 300ms para 1000ms - menos I/O, salva só quando necessário
+    _positionTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
       _saveOverlayPosition();
     });
   }
@@ -197,7 +216,10 @@ class _OverlayAppState extends State<OverlayApp> {
 
   Future<void> _pullFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
+    // SEMPRE recarrega para garantir sincronização com o estado principal
+    // É crítico quando o overlay está abrindo ou quando o estado muda
     await prefs.reload();
+    
     final elapsedMs = prefs.getInt('overlay_elapsed_ms');
     final accumulatedMs = prefs.getInt('overlay_accumulated_ms');
     final runningSince = prefs.getInt('overlay_running_since_ms');
@@ -205,8 +227,11 @@ class _OverlayAppState extends State<OverlayApp> {
     final isRunning = prefs.getBool('overlay_is_running');
     final source = prefs.getString('overlay_state_source');
     final ts = prefs.getInt('overlay_state_ts') ?? 0;
+    
+    // Settings que não mudam frequentemente - ler apenas se necessário
     final showMilliseconds = prefs.getBool('showMilliseconds') ?? true;
     final showHours = prefs.getBool('showHours') ?? true;
+    final breakMinutesByHour = prefs.getBool('breakMinutesByHour') ?? true;
     final stoppedBgColor = Color(prefs.getInt('overlayStoppedBgColor') ?? 0xD9000000);
     final runningBgColor = Color(prefs.getInt('overlayRunningBgColor') ?? 0xD9000000);
     final textColor = Color(prefs.getInt('overlayTextColor') ?? 0xFFFFFFFF);
@@ -235,6 +260,7 @@ class _OverlayAppState extends State<OverlayApp> {
         setState(() {
           _showMilliseconds = showMilliseconds;
           _showHours = showHours;
+          _breakMinutesByHour = breakMinutesByHour;
           _overlayStoppedBgColor = stoppedBgColor;
           _overlayRunningBgColor = runningBgColor;
           _overlayTextColor = textColor;
@@ -250,13 +276,18 @@ class _OverlayAppState extends State<OverlayApp> {
       return;
     }
 
-    final needsUpdate = ts > _lastStateTs ||
+    // ALWAYS sync time-state from main app, regardless of source
+    // This ensures overlay is synchronized when main app updates
+    final timeStateChanged = ts > _lastStateTs ||
         elapsedMs != _elapsed.inMilliseconds ||
         (accumulatedMs != null && accumulatedMs != _accumulatedMs) ||
         (runningSince != null && runningSince != _runningSinceMs) ||
         (lastLapElapsed != null && lastLapElapsed != _lastLapElapsedMs) ||
         isRunning != _isRunning;
-    if (!needsUpdate && !settingsChanged) return;
+    
+    final needsUpdate = timeStateChanged || settingsChanged;
+    
+    if (!needsUpdate) return;
 
     final now = DateTime.now().millisecondsSinceEpoch;
     final hasRunningSince = (runningSince ?? -1) > 0;
@@ -282,6 +313,7 @@ class _OverlayAppState extends State<OverlayApp> {
       _lastStateTs = ts;
       _showMilliseconds = showMilliseconds;
       _showHours = showHours;
+      _breakMinutesByHour = breakMinutesByHour;
       _overlayStoppedBgColor = stoppedBgColor;
       _overlayRunningBgColor = runningBgColor;
       _overlayTextColor = textColor;
@@ -375,16 +407,18 @@ class _OverlayAppState extends State<OverlayApp> {
     });
   }
 
-  Future<void> _onDoubleTap() async {
+  void _onDoubleTap() {
     if (_isRunning) {
       setState(() {
         _isRunning = false;
         _accumulatedMs = _elapsed.inMilliseconds;
         _runningSinceMs = -1;
+        _showActions = false;
       });
     }
-    await _persistOverlayState();
-    await _pushEvent({
+    // Executa persistência em background sem bloquear a UI
+    _persistOverlayState();
+    _pushEvent({
       'type': 'stop',
       'timestamp': DateTime.now().toIso8601String(),
       'elapsedMs': _elapsed.inMilliseconds,
@@ -392,7 +426,7 @@ class _OverlayAppState extends State<OverlayApp> {
     });
   }
 
-  Future<void> _resetFromOverlay() async {
+  void _resetFromOverlay() {
     setState(() {
       _isRunning = false;
       _elapsed = Duration.zero;
@@ -402,8 +436,9 @@ class _OverlayAppState extends State<OverlayApp> {
       _lastLapSetTsMs = 0;
       _showActions = false;
     });
-    await _persistOverlayState();
-    await _pushEvent({
+    // Executa persistência em background sem bloquear a UI
+    _persistOverlayState();
+    _pushEvent({
       'type': 'reset',
       'timestamp': DateTime.now().toIso8601String(),
       'elapsedMs': _elapsed.inMilliseconds,
@@ -427,7 +462,10 @@ class _OverlayAppState extends State<OverlayApp> {
   }
 
   String _formatMain(Duration d) {
-    if (_showHours) {
+    // Se minutos >= 60 e breakMinutesByHour está ativo, sempre mostrar horas
+    final shouldShowHours = _showHours || (_breakMinutesByHour && d.inMinutes >= 60);
+    
+    if (shouldShowHours) {
       final hours = d.inHours.toString().padLeft(2, '0');
       final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
       final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
@@ -597,7 +635,7 @@ class _OverlayAppState extends State<OverlayApp> {
                               Expanded(
                                 child: GestureDetector(
                                   behavior: HitTestBehavior.opaque,
-                                  onTap: _resetFromOverlay,
+                                  onTap: _isRunning ? _onDoubleTap : _resetFromOverlay,
                                   child: Container(
                                     height: 24 * _overlayScale(),
                                     alignment: Alignment.center,
@@ -607,7 +645,7 @@ class _OverlayAppState extends State<OverlayApp> {
                                       borderRadius: BorderRadius.circular(4 * _overlayScale()),
                                     ),
                                     child: Text(
-                                      'Zerar',
+                                      _isRunning ? 'Parar' : 'Zerar',
                                       style: TextStyle(
                                         color: _overlayTextColor.withValues(alpha: 0.85),
                                         fontSize: 10 * _overlayScale(),

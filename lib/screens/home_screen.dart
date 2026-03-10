@@ -19,19 +19,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late Timer _timer;
   late Future<PackageInfo> _packageInfo;
   Size? _lastScreenSize;
+  bool _wasRunning = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Lazy load PackageInfo - não bloqueia inicialização
     _packageInfo = PackageInfo.fromPlatform();
-    _startTimer();
+    _startAdaptiveTimer();
   }
 
-  void _startTimer() {
-    _timer = Timer.periodic(const Duration(milliseconds: 30), (timer) {
+  void _startAdaptiveTimer() {
+    // Usa timer adaptativo: só roda quando cronômetro está ativo
+    // Verifica a cada 50ms se precisa rodar (muito mais eficiente que 30ms)
+    _timer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
       final provider = context.read<StopwatchProvider>();
-      provider.tick();
+      final isRunning = provider.isRunning;
+      
+      // Só executa tick quando cronômetro está rodando
+      if (isRunning) {
+        provider.tick();
+      }
+      
+      // Se foi rodando e parou, notifica os ouvintes para atualizar UI
+      if (_wasRunning && !isRunning) {
+        provider.tick();
+        _wasRunning = false;
+      } else if (!_wasRunning && isRunning) {
+        _wasRunning = true;
+      }
     });
   }
 

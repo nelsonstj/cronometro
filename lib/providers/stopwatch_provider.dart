@@ -95,6 +95,8 @@ class StopwatchProvider extends ChangeNotifier {
   // Configurações
   bool _showLapTime = true;
   bool _showOverlay = false;
+  bool _showOnLockScreen = false;
+  bool _breakMinutesByHour = true;
   ThemeMode _themeMode = ThemeMode.system;
   bool _showMilliseconds = true;
   bool _showHours = true;
@@ -135,6 +137,8 @@ class StopwatchProvider extends ChangeNotifier {
   List<int> get laps => _laps;
   bool get showLapTime => _showLapTime;
   bool get showOverlay => _showOverlay;
+  bool get showOnLockScreen => _showOnLockScreen;
+  bool get breakMinutesByHour => _breakMinutesByHour;
   ThemeMode get themeMode => _themeMode;
   bool get showMilliseconds => _showMilliseconds;
   bool get showHours => _showHours;
@@ -155,6 +159,8 @@ class StopwatchProvider extends ChangeNotifier {
 
   void _loadPreferences() {
     _showLapTime = _prefs.getBool('showLapTime') ?? true;
+    _showOnLockScreen = _prefs.getBool('showOnLockScreen') ?? false;
+    _breakMinutesByHour = _prefs.getBool('breakMinutesByHour') ?? true;
     _showMilliseconds = _prefs.getBool('showMilliseconds') ?? true;
     _showHours = _prefs.getBool('showHours') ?? true;
     _overlayStoppedBgColor = Color(_prefs.getInt('overlayStoppedBgColor') ?? 0xD9000000);
@@ -214,6 +220,20 @@ class StopwatchProvider extends ChangeNotifier {
     _showHours = value;
     _prefs.setBool('showHours', _showHours);
     _persistOverlayState(source: 'main');
+    notifyListeners();
+  }
+
+  void setShowOnLockScreen(bool value) {
+    if (_showOnLockScreen == value) return;
+    _showOnLockScreen = value;
+    _prefs.setBool('showOnLockScreen', _showOnLockScreen);
+    notifyListeners();
+  }
+
+  void setBreakMinutesByHour(bool value) {
+    if (_breakMinutesByHour == value) return;
+    _breakMinutesByHour = value;
+    _prefs.setBool('breakMinutesByHour', _breakMinutesByHour);
     notifyListeners();
   }
 
@@ -356,9 +376,12 @@ class StopwatchProvider extends ChangeNotifier {
     notifyListeners();
 
     if (_showOverlay) {
+      // Persiste o estado IMEDIATAMENTE antes de mostrar o overlay
       await _persistOverlayState(source: 'main');
-      // Give the overlay engine time to read prefs before it starts.
-      await Future.delayed(const Duration(milliseconds: 300));
+      
+      // Pequena pausa para garantir que o overlay consegue ler as prefs
+      // Reduzido de 300ms para 150ms pois agora a persistência é mais eficiente
+      await Future.delayed(const Duration(milliseconds: 150));
       final granted = await AndroidOverlay.requestPermission();
       if (!granted) {
         _showOverlay = false;
@@ -368,6 +391,8 @@ class StopwatchProvider extends ChangeNotifier {
 
       final shown = await AndroidOverlay.showOverlay();
       if (shown) {
+        // Sincroniza novamente logo após o overlay aparecer
+        await _persistOverlayState(source: 'main');
         // Start polling for overlay events
         startOverlayEventPoller();
         _startOverlayStateWriter();
@@ -393,18 +418,22 @@ class StopwatchProvider extends ChangeNotifier {
 
   void startOverlayEventPoller() {
     _overlayPoller?.cancel();
-    _overlayPoller = Timer.periodic(const Duration(milliseconds: 700), (_) => _consumeOverlayEvents());
+    // Reduzido de 700ms para 1000ms - menos reload de SharedPreferences
+    _overlayPoller = Timer.periodic(const Duration(milliseconds: 1000), (_) => _consumeOverlayEvents());
   }
 
   void _startOverlayStateWriter() {
     _overlayStateWriter?.cancel();
+    // Aumentado de 800ms para 400ms para sincronização mais rápida
+    // Ajuste fino entre responsividade e economia de bateria
     _overlayStateWriter = Timer.periodic(const Duration(milliseconds: 400), (_) => _persistOverlayState(source: 'main'));
   }
 
   Future<void> _consumeOverlayEvents() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    final raw = prefs.getString('overlay_events') ?? '[]';
+    // Otimizado: Cache a instância de SharedPreferences para evitar create múltiplas
+    final prefs = SharedPreferences.getInstance();
+    await (await prefs).reload();
+    final raw = (await prefs).getString('overlay_events') ?? '[]';
     List events;
     try {
       events = jsonDecode(raw) as List;
@@ -443,7 +472,7 @@ class StopwatchProvider extends ChangeNotifier {
 
     // Clean up processed events
     final remaining = events.where((e) => !_processedOverlayIds.contains(e['id']?.toString())).toList();
-    await prefs.setString('overlay_events', jsonEncode(remaining));
+    await (await prefs).setString('overlay_events', jsonEncode(remaining));
 
     // Prevent unbounded growth of processed ids
     if (_processedOverlayIds.length > 2000) {
@@ -454,16 +483,17 @@ class StopwatchProvider extends ChangeNotifier {
   Future<void> syncOverlayState() async {
     await _consumeOverlayEvents();
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    final source = prefs.getString('overlay_state_source');
-    final ts = prefs.getInt('overlay_state_ts') ?? 0;
+    // Otimizado: única instância de SharedPreferences
+    final prefsInstance = await SharedPreferences.getInstance();
+    await prefsInstance.reload();
+    final source = prefsInstance.getString('overlay_state_source');
+    final ts = prefsInstance.getInt('overlay_state_ts') ?? 0;
     if (source != 'overlay' || ts <= _lastOverlayStateTsFromOverlay) return;
 
-    final elapsedMs = prefs.getInt('overlay_elapsed_ms') ?? 0;
-    final accumulatedMs = prefs.getInt('overlay_accumulated_ms') ?? elapsedMs;
-    final runningSince = prefs.getInt('overlay_running_since_ms') ?? -1;
-    final isRunning = prefs.getBool('overlay_is_running') ?? false;
+    final elapsedMs = prefsInstance.getInt('overlay_elapsed_ms') ?? 0;
+    final accumulatedMs = prefsInstance.getInt('overlay_accumulated_ms') ?? elapsedMs;
+    final runningSince = prefsInstance.getInt('overlay_running_since_ms') ?? -1;
+    final isRunning = prefsInstance.getBool('overlay_is_running') ?? false;
 
     final now = DateTime.now().millisecondsSinceEpoch;
     final hasRunningSince = runningSince > 0;
@@ -591,7 +621,8 @@ class StopwatchProvider extends ChangeNotifier {
       notifyListeners();
       if (_showOverlay) {
         final now = DateTime.now().millisecondsSinceEpoch;
-        if (now - _lastOverlayPersistMs >= 400) {
+        // Otimizado: de 400ms para 800ms para economizar I/O
+        if (now - _lastOverlayPersistMs >= 800) {
           _lastOverlayPersistMs = now;
           _persistOverlayState(source: 'main');
         }
